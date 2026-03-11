@@ -12,6 +12,8 @@ Returns a nested dict (MPTF) mirroring the MATLAB struct.
 Author: Giovanni Bruno (Python port)
 """
 
+import re
+
 import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
@@ -23,6 +25,12 @@ from mptf.helpers import previous_reb_gb
 from mptf.selection_helpers import parse_maxmin_suffix, pick_by_k
 from mptf.portfolio_helpers import regcov_det
 from mptf.regression_helpers import regrobustse
+
+
+# Private column names used after merging market into factor DataFrames.
+# These guarantee row-level alignment between factor and market data.
+_MKT_COL = "__MKT__"
+_MKTd_COL = "__MKTd__"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -79,15 +87,36 @@ def mptfcalculation(P):
     cv_start = pd.Timestamp(P.get("cv_start", "1977-01-01"))
     update_freq = P["updateFreq"]
     updmonth = P.get("updmonth", 7) or 7
+    T_est = P["T_est"]              # estimation window in months
+    est_freq = P["est_freq"]        # 'monthly' or 'daily'
 
     # ── Factor / market data references ───────────────────────────
     ptf = P["PTF"]
     ptfd = P["PTFd"]
-    df_f = ptf.F.copy()         # monthly factor returns (Date + N columns)
-    df_fd = ptfd.F.copy()       # daily factor returns
-    mkt_df = P["MKT"].copy()    # monthly market (Date + FF6_MktMinusRF)
-    mktd_df = P["MKTd"].copy()  # daily market
-    pname = ptf.pname           # list of factor names
+    pname = ptf.pname               # list of factor names
+    N = len(pname)
+
+    # Merge market returns INTO factor DataFrames (guarantees row-level
+    # alignment everywhere — eliminates cross-DataFrame mask bugs).
+    df_f = ptf.F.copy()
+    df_f = df_f.merge(
+        P["MKT"][["Date", "FF6_MktMinusRF"]].rename(
+            columns={"FF6_MktMinusRF": _MKT_COL}
+        ),
+        on="Date", how="inner",
+    ).reset_index(drop=True)
+
+    df_fd = ptfd.F.copy()
+    df_fd = df_fd.merge(
+        P["MKTd"][["Date", "FF6_MktMinusRF"]].rename(
+            columns={"FF6_MktMinusRF": _MKTd_COL}
+        ),
+        on="Date", how="inner",
+    ).reset_index(drop=True)
+
+    # Factor-only column names (everything except Date and the merged market col)
+    _factor_cols = [c for c in df_f.columns if c not in ("Date", _MKT_COL)]
+    _factor_cols_d = [c for c in df_fd.columns if c not in ("Date", _MKTd_COL)]
 
     # ── OOS date mask ─────────────────────────────────────────────
     oos_start = pd.Timestamp(P["oos_start"])
@@ -95,13 +124,9 @@ def mptfcalculation(P):
 
     oos_mask_f = (df_f["Date"] >= oos_start) & (df_f["Date"] <= oos_end)
     F_oos = df_f.loc[oos_mask_f].reset_index(drop=True)
-    # Merge market onto factor dates (guarantees alignment)
-    F_oos = F_oos.merge(mkt_df[["Date", "FF6_MktMinusRF"]], on="Date", how="left")
-    MKT_oos = F_oos["FF6_MktMinusRF"].to_numpy(dtype=float)
-    F_oos = F_oos.drop(columns="FF6_MktMinusRF")
+    MKT_oos = F_oos[_MKT_COL].to_numpy(dtype=float)
     oos_dates = F_oos["Date"].values
     T_oos = len(oos_dates)
-    N = len(pname)
 
     # ── Parse factor-selection IDs ────────────────────────────────
     fctselid = P["fctselid"]
@@ -109,13 +134,14 @@ def mptfcalculation(P):
     conditional_sel = parse_maxmin_suffix(fctselid)
     fctselid_complete = list(fctselid)
     # Strip suffix: 'GFDAIQ_max2' -> 'GFDAIQ'
-    import re
     fctselid_clean = [re.sub(r"_.*", "", s) for s in fctselid]
 
     S = len(fctselid_clean)  # number of factor-set specifications
 
     # ── Selection matrices (boolean) ──────────────────────────────
-    selmat = np.column_stack([factorselection(pname, fctselid_clean[s]) for s in range(S)])
+    selmat = np.column_stack(
+        [factorselection(pname, fctselid_clean[s]) for s in range(S)]
+    )
     selcv = factorselection(pname, fctselid_cv[0])
 
     C = len(P["mptf_type"])  # number of portfolio types
@@ -131,7 +157,10 @@ def mptfcalculation(P):
             # contab is list-of-lists, shape (Ncon, S)
             Ncon = len(contab)
             col_s = [contab[l][s] for l in range(Ncon)]
-            has_valid = any(c is not None and not (isinstance(c, float) and np.isnan(c)) for c in col_s)
+            has_valid = any(
+                c is not None and not (isinstance(c, float) and np.isnan(c))
+                for c in col_s
+            )
             if has_valid:
                 Nsel = int(selmat[:, s].sum())
                 pname_sel = [pname[i] for i in range(N) if selmat[i, s]]
@@ -176,7 +205,7 @@ def mptfcalculation(P):
     # ── Shared estimation-input dict ──────────────────────────────
     I = {
         "normalizewgt": P["normalizewgt"],
-        "est_freq": P["est_freq"],
+        "est_freq": est_freq,
     }
 
     # ── Persistent kappa values (carried forward between updates) ─
@@ -212,29 +241,28 @@ def mptfcalculation(P):
         upd_tun_pre = upd_tun
 
         # ── Estimation window dates ───────────────────────────────
-        T_est = P["T_est"]  # months
         date_start_est = pd.Timestamp(upddate - relativedelta(months=T_est))
         date_end_est = pd.Timestamp(upddate - relativedelta(months=1))
         # Shift to end of month
         date_end_est = date_end_est + pd.offsets.MonthEnd(0)
 
-        # Rolling masks
+        # Rolling masks (applied to df_f / df_fd which contain merged market)
         m_roll = (df_f["Date"] >= date_start_est) & (df_f["Date"] <= date_end_est)
         m_exp = (df_f["Date"] >= cv_start) & (df_f["Date"] <= date_end_est)
         d_roll = (df_fd["Date"] >= date_start_est) & (df_fd["Date"] <= date_end_est)
 
         # ── Estimation returns (Z) ────────────────────────────────
-        est_freq = P["est_freq"]
+        # All data extracted from the SAME DataFrame → guaranteed alignment
         if est_freq == "daily":
-            Z = df_fd.loc[d_roll].drop(columns="Date").to_numpy(dtype=float)
-            mkt_est_roll = mktd_df.loc[d_roll, "FF6_MktMinusRF"].to_numpy(dtype=float)
+            Z = df_fd.loc[d_roll, _factor_cols_d].to_numpy(dtype=float)
+            mkt_est_roll = df_fd.loc[d_roll, _MKTd_COL].to_numpy(dtype=float)
         else:  # monthly
-            Z = df_f.loc[m_roll].drop(columns="Date").to_numpy(dtype=float)
-            mkt_est_roll = mkt_df.loc[m_roll, "FF6_MktMinusRF"].to_numpy(dtype=float)
+            Z = df_f.loc[m_roll, _factor_cols].to_numpy(dtype=float)
+            mkt_est_roll = df_f.loc[m_roll, _MKT_COL].to_numpy(dtype=float)
 
         # Monthly Z for market-beta estimation (always monthly betas)
-        Z_mon = df_f.loc[m_roll].drop(columns="Date").to_numpy(dtype=float)
-        mkt_mon = mkt_df.loc[m_roll, "FF6_MktMinusRF"].to_numpy(dtype=float)
+        Z_mon = df_f.loc[m_roll, _factor_cols].to_numpy(dtype=float)
+        mkt_mon = df_f.loc[m_roll, _MKT_COL].to_numpy(dtype=float)
 
         # ── Market-beta estimation (OLS on monthly data) ──────────
         T_mon = len(mkt_mon)
@@ -256,12 +284,12 @@ def mptfcalculation(P):
         Lev = np.std(mkt_est_roll, ddof=1) / np.std(Zadj, axis=0, ddof=1)
         Zadj = Zadj * Lev[np.newaxis, :]
 
-        # ── OOS single-day return (market-adjusted) ───────────────
-        Z_oos_raw = F_oos.iloc[m, 1:].to_numpy(dtype=float)  # (N,)
+        # ── OOS single-period return (market-adjusted) ────────────
+        Z_oos_raw = F_oos.loc[m, _factor_cols].to_numpy(dtype=float)  # (N,)
         Z_oos_adj = (Z_oos_raw - mktbeta_est * MKT_oos[m]) * Lev
 
         # ── Expanding-window market returns (for heuristic kappa) ─
-        mkt_est_exp = mkt_df.loc[m_exp, "FF6_MktMinusRF"].to_numpy(dtype=float)
+        mkt_est_exp = df_f.loc[m_exp, _MKT_COL].to_numpy(dtype=float)
         I["mktrets"] = mkt_est_exp
 
         # ══════════════════════════════════════════════════════════
@@ -282,13 +310,25 @@ def mptfcalculation(P):
                 if mtype in ("bayes_kns_dataCSR2", "bayes_kns_dataHJD"):
                     # Expanding window for CV
                     if cv_freq == "daily":
-                        cv_mask = (df_fd["Date"] >= cv_start) & (df_fd["Date"] <= date_end_est)
-                        Zcv = df_fd.loc[cv_mask].drop(columns="Date").to_numpy(dtype=float)
-                        mkt_cv = mktd_df.loc[cv_mask, "FF6_MktMinusRF"].to_numpy(dtype=float)
+                        cv_mask = (df_fd["Date"] >= cv_start) & (
+                            df_fd["Date"] <= date_end_est
+                        )
+                        Zcv = df_fd.loc[cv_mask, _factor_cols_d].to_numpy(
+                            dtype=float
+                        )
+                        mkt_cv = df_fd.loc[cv_mask, _MKTd_COL].to_numpy(
+                            dtype=float
+                        )
                     else:
-                        cv_mask = (df_f["Date"] >= cv_start) & (df_f["Date"] <= date_end_est)
-                        Zcv = df_f.loc[cv_mask].drop(columns="Date").to_numpy(dtype=float)
-                        mkt_cv = mkt_df.loc[cv_mask, "FF6_MktMinusRF"].to_numpy(dtype=float)
+                        cv_mask = (df_f["Date"] >= cv_start) & (
+                            df_f["Date"] <= date_end_est
+                        )
+                        Zcv = df_f.loc[cv_mask, _factor_cols].to_numpy(
+                            dtype=float
+                        )
+                        mkt_cv = df_f.loc[cv_mask, _MKT_COL].to_numpy(
+                            dtype=float
+                        )
 
                     cv_otype = "CSR2" if mtype == "bayes_kns_dataCSR2" else "HJD"
                     kopt, _, _, _ = kns_tuning_kappa(
@@ -340,28 +380,14 @@ def mptfcalculation(P):
 
                 # ── Compute weights ───────────────────────────────
                 result = call_mptfweights(I)
-                if isinstance(result, tuple):
-                    beta = result[0]
-                else:
-                    beta = result
+                beta, post_SR, post_mu, Phi = result
 
-                # ── Ex-ante SR on full factor set (last selmat col) ─
-                sel_full = selmat[:, -1].astype(bool)
-                beta_full = np.zeros(N)
-                beta_full[idFlg_s] = beta
-                beta_full_sel = beta_full[sel_full]
-                I_full = dict(I)
-                I_full["returns"] = Zadj[:, sel_full]
-                I_full["A"] = None
-                I_full["bineq"] = None
-                res_full = call_mptfweights(I_full)
-                if isinstance(res_full, tuple) and len(res_full) >= 4:
-                    post_mu = res_full[2]
-                    Phi = res_full[3]
-                    denom = beta_full_sel @ Phi @ beta_full_sel
+                # ── Ex-ante SR (from same call — same dimensions) ─
+                if post_mu is not None and Phi is not None:
+                    denom = beta @ Phi @ beta
                     if denom > 0:
-                        exante_sr = (beta_full_sel @ post_mu / np.sqrt(denom)) * np.sqrt(252)
-                        exante_mu = (beta_full_sel @ post_mu) * 252
+                        exante_sr = (beta @ post_mu / np.sqrt(denom)) * np.sqrt(252)
+                        exante_mu = (beta @ post_mu) * 252
                     else:
                         exante_sr = np.nan
                         exante_mu = np.nan
@@ -385,22 +411,26 @@ def mptfcalculation(P):
 
     if est_freq == "daily":
         is_mask_d = (df_fd["Date"] >= oos_start) & (df_fd["Date"] <= oos_end)
-        Z_is_est = df_fd.loc[is_mask_d].drop(columns="Date").to_numpy(dtype=float)
-        mkt_is_est = mktd_df.loc[is_mask_d, "FF6_MktMinusRF"].to_numpy(dtype=float)
+        Z_is_est = df_fd.loc[is_mask_d, _factor_cols_d].to_numpy(dtype=float)
+        mkt_is_est = df_fd.loc[is_mask_d, _MKTd_COL].to_numpy(dtype=float)
     else:
-        Z_is_est = df_f.loc[is_mask_m].drop(columns="Date").to_numpy(dtype=float)
-        mkt_is_est = mkt_df.loc[is_mask_m, "FF6_MktMinusRF"].to_numpy(dtype=float)
+        Z_is_est = df_f.loc[is_mask_m, _factor_cols].to_numpy(dtype=float)
+        mkt_is_est = df_f.loc[is_mask_m, _MKT_COL].to_numpy(dtype=float)
 
     # Market-beta (NW) on estimation-freq data
     T_is = Z_is_est.shape[0]
     X_is = np.column_stack([np.ones(T_is), mkt_is_est])
     mktbeta_is = np.full((2, N), np.nan)
-    alphatstat_is = np.zeros(N)
     for i in range(N):
         res = regrobustse(Z_is_est[:, i], X_is, "nw")
         mktbeta_is[:, i] = res["coeff"]
-        alphatstat_is[i] = res["tstat"][0]
     mktbeta_is_slope = mktbeta_is[1, :]
+
+    # IS alphatstat: MATLAB uses the slope coefficients (not t-stats).
+    # See MATLAB mptfcalculation.m IS section:
+    #   mktbeta_est = mktbeta_est(2,:);      % overwrite to slopes
+    #   alphatstat  = mktbeta_est(1,:)';      % this IS the slopes
+    alphatstat_is = mktbeta_is_slope.copy()
 
     # Hedge + lever
     Zadj_is = Z_is_est - mktbeta_is_slope[np.newaxis, :] * mkt_is_est[:, np.newaxis]
@@ -408,11 +438,14 @@ def mptfcalculation(P):
     Zadj_is = Zadj_is * Lev_is[np.newaxis, :]
 
     # IS returns (monthly, market-adjusted)
-    Z_is_mon = df_f.loc[is_mask_m].drop(columns="Date").to_numpy(dtype=float)
-    mkt_is_mon = mkt_df.loc[is_mask_m, "FF6_MktMinusRF"].to_numpy(dtype=float)
-    Z_is_adj = (Z_is_mon - mktbeta_is_slope[np.newaxis, :] * mkt_is_mon[:, np.newaxis]) * Lev_is[np.newaxis, :]
+    Z_is_mon = df_f.loc[is_mask_m, _factor_cols].to_numpy(dtype=float)
+    mkt_is_mon = df_f.loc[is_mask_m, _MKT_COL].to_numpy(dtype=float)
+    Z_is_adj = (
+        (Z_is_mon - mktbeta_is_slope[np.newaxis, :] * mkt_is_mon[:, np.newaxis])
+        * Lev_is[np.newaxis, :]
+    )
 
-    mkt_is_exp = mkt_df.loc[is_mask_m_exp, "FF6_MktMinusRF"].to_numpy(dtype=float)
+    mkt_is_exp = df_f.loc[is_mask_m_exp, _MKT_COL].to_numpy(dtype=float)
     I["mktrets"] = mkt_is_exp
 
     for p in range(C):
