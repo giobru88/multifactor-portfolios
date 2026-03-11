@@ -102,8 +102,8 @@ GFDALL_FACTORS = (
 )
 
 GFDSparseFF_FACTORS = ("GFD_at_gr1", "GFD_be_me", "GFD_ope_be", "GFD_market_equity", "GFD_ret_6_1")
-GFDSparse_QfactorsFF = ("GFD_at_gr1", "GFD_ope_be")     # {1},{2} in MATLAB
-GFDSparse_QfactorsHXZ = ("GFD_at_gr1", "GFD_niq_be")    # {1},{2} in MATLAB
+GFDSparse_QfactorsFF = ("GFD_at_gr1", "GFD_ope_be")     
+GFDSparse_QfactorsHXZ = ("GFD_at_gr1", "GFD_niq_be")    
 
 GFDPROF_QFACTORS = (
     "GFD_cop_at","GFD_cop_atl1","GFD_dgp_dsale","GFD_ebit_bev","GFD_ebit_sale",
@@ -126,8 +126,8 @@ OAP_QFACTORS = (
 OAP_PROF = ("OAP_CBOperProf","OAP_FEPS","OAP_GP","OAP_OperProf","OAP_OperProfRD","OAP_roaq","OAP_RoE")
 OAP_INV = ("OAP_AssetGrowth","OAP_ChEQ","OAP_DelEqu","OAP_DelLTI","OAP_dNoa","OAP_GrLTNOA","OAP_InvGrowth","OAP_Investment","OAP_InvestPPEInv")
 
-OAP_FFQ = ("OAP_AssetGrowth", "OAP_OperProf")  # {1},{2} in MATLAB
-OAP_HXZQ = ("OAP_AssetGrowth", "OAP_RoE")      # {1},{2} in MATLAB
+OAP_FFQ = ("OAP_AssetGrowth", "OAP_OperProf")  
+OAP_HXZQ = ("OAP_AssetGrowth", "OAP_RoE")      
 
 
 # ---------- 2) Selection mapping ----------

@@ -1,2 +1,4 @@
 # multifactor-portfolios
-Multifactor portfolio construction and OOS testing (KNS 2020)
+
+Multifactor portfolio construction and testing (KNS 2020)
+
