@@ -95,12 +95,13 @@ def mptfcalculation(P):
 
     oos_mask_f = (df_f["Date"] >= oos_start) & (df_f["Date"] <= oos_end)
     F_oos = df_f.loc[oos_mask_f].reset_index(drop=True)
-    oos_dates = F_oos["Date"].values  # array of Timestamps
+    # Merge market onto factor dates (guarantees alignment)
+    F_oos = F_oos.merge(mkt_df[["Date", "FF6_MktMinusRF"]], on="Date", how="left")
+    MKT_oos = F_oos["FF6_MktMinusRF"].to_numpy(dtype=float)
+    F_oos = F_oos.drop(columns="FF6_MktMinusRF")
+    oos_dates = F_oos["Date"].values
     T_oos = len(oos_dates)
     N = len(pname)
-
-    oos_mask_mkt = (mkt_df["Date"] >= oos_start) & (mkt_df["Date"] <= oos_end)
-    MKT_oos = mkt_df.loc[oos_mask_mkt, "FF6_MktMinusRF"].values
 
     # ── Parse factor-selection IDs ────────────────────────────────
     fctselid = P["fctselid"]
@@ -212,8 +213,8 @@ def mptfcalculation(P):
 
         # ── Estimation window dates ───────────────────────────────
         T_est = P["T_est"]  # months
-        date_start_est = upddate - relativedelta(months=T_est)
-        date_end_est = date_start_est + relativedelta(months=T_est - 1)
+        date_start_est = pd.Timestamp(upddate - relativedelta(months=T_est))
+        date_end_est = pd.Timestamp(upddate - relativedelta(months=1))
         # Shift to end of month
         date_end_est = date_end_est + pd.offsets.MonthEnd(0)
 

@@ -40,4 +40,4 @@ def previous_reb_gb(d: Any, m: int) -> date:
         last_day = calendar.monthrange(y, m)[1]
         candidate = date(y, m, last_day)
 
-    return candidate
+    return pd.Timestamp(candidate)
