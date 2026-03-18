@@ -46,7 +46,7 @@ def _update_tuning(upd_tun, upd_tun_pre):
 # Main function
 # ═══════════════════════════════════════════════════════════════════
 
-def mptfcalculation(P, diagnostics=False):
+def mptfcalculation(P):
     """Run multifactor portfolio OOS and IS evaluation.
 
     Parameters
@@ -72,8 +72,6 @@ def mptfcalculation(P, diagnostics=False):
                      (default '1977-01-01'; set in main script)
         cv_freq    : str — frequency for kappa CV ('monthly' or 'daily')
                      (default: same as est_freq)
-    diagnostics : bool
-        If True, collect per-rebalancing diagnostics in MPTF["diag"].
 
     Returns
     -------
@@ -82,7 +80,6 @@ def mptfcalculation(P, diagnostics=False):
         kappa_heu, kappa_ddcsr2, kappa_ddhjd,
         kappa_heu_is, kappa_ddcsr2_is, kappa_ddhjd_is,
         exanteSR_oos, exanteMu_oos
-        diag : list of dicts (only if diagnostics=True)
     """
 
     # ── Defaults ──────────────────────────────────────────────────
@@ -204,10 +201,6 @@ def mptfcalculation(P, diagnostics=False):
     # Column labels for output DataFrames
     MPTF["fctselid_complete"] = fctselid_complete
     MPTF["oos_dates"] = oos_dates
-
-    # ── Diagnostics container ─────────────────────────────────────
-    if diagnostics:
-        MPTF["diag"] = []
 
     # ── Shared estimation-input dict ──────────────────────────────
     I = {
@@ -408,28 +401,6 @@ def mptfcalculation(P, diagnostics=False):
                 MPTF["exanteSR_oos"][mtype][m, s] = exante_sr
                 MPTF["exanteMu_oos"][mtype][m, s] = exante_mu
 
-                # ── Collect diagnostics at rebalancing dates ──────
-                if diagnostics and do_tune:
-                    mean_est = I["returns"].mean(axis=0)
-                    MPTF["diag"].append({
-                        "m": m,
-                        "oos_date": oos_date_m,
-                        "upddate": upddate,
-                        "date_start_est": date_start_est,
-                        "date_end_est": date_end_est,
-                        "T_est_obs": T_est_obs,
-                        "T_mon": T_mon,
-                        "mptf_type": mtype,
-                        "fctselid": fctselid_complete[s],
-                        "s": s,
-                        "N_factors": I["returns"].shape[1],
-                        "beta": beta.copy(),
-                        "mean_est": mean_est.copy(),
-                        "oos_ret": MPTF["rets_oos"][mtype][m, s],
-                        "has_constraints": I["A"] is not None,
-                        "all_positive": bool(np.all(beta >= -1e-10)),
-                    })
-
     # ==============================================================
     #  IN-SAMPLE CALCULATION
     # ==============================================================
@@ -456,6 +427,9 @@ def mptfcalculation(P, diagnostics=False):
     mktbeta_is_slope = mktbeta_is[1, :]
 
     # IS alphatstat: MATLAB uses the slope coefficients (not t-stats).
+    # See MATLAB mptfcalculation.m IS section:
+    #   mktbeta_est = mktbeta_est(2,:);      % overwrite to slopes
+    #   alphatstat  = mktbeta_est(1,:)';      % this IS the slopes
     alphatstat_is = mktbeta_is_slope.copy()
 
     # Hedge + lever
