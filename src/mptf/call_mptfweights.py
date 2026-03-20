@@ -39,6 +39,7 @@ def _bayes_kns_handler(
     normalizewgt = _get(I, "normalizewgt", "YES")
     A = _get(I, "A", None)
     bineq = _get(I, "bineq", None)
+    qp_solver = _get(I, "qp_solver", "quadprog")
 
     if mptf_type == "bayes_kns_naive":
         kappa = 50.0
@@ -63,6 +64,7 @@ def _bayes_kns_handler(
         A=A,
         bineq=bineq,
         cov_method=cov_method,  # default "det" (MATLAB-consistent)
+        qp_solver=qp_solver,    # default "quadprog" (Goldfarb-Idnani)
     )
     return beta, post_SR, post_mu, Phi
 

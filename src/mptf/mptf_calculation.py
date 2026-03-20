@@ -72,6 +72,7 @@ def mptfcalculation(P, diagnostics=False):
                      (default '1977-01-01'; set in main script)
         cv_freq    : str — frequency for kappa CV ('monthly' or 'daily')
                      (default: same as est_freq)
+        qp_solver  : str — 'quadprog' (default, matches MATLAB) or 'cvxopt' (legacy)
     diagnostics : bool
         If True, collect per-rebalancing diagnostics in MPTF["diag"].
 
@@ -213,6 +214,7 @@ def mptfcalculation(P, diagnostics=False):
     I = {
         "normalizewgt": P["normalizewgt"],
         "est_freq": est_freq,
+        "qp_solver": P.get("qp_solver", "quadprog"),
     }
 
     # ── Persistent kappa values (carried forward between updates) ─

@@ -22,8 +22,6 @@ Author: (ported for Giovanni Bruno)
 from typing import Callable, Literal, Optional, Tuple, Union
 import numpy as np
 
-from .kns_ridge_quadprog import kns_ridge_quadprog
-
 
 Frequency = Literal["monthly", "weekly", "daily"]
 CovMethod = Literal["det", "lw","sample"]
@@ -170,6 +168,7 @@ def sdfcoefficients_bayes_kns(
     A: Optional[np.ndarray] = None,
     bineq: Optional[np.ndarray] = None,
     cov_method: Union[CovMethod, Callable[[np.ndarray], np.ndarray]] = "det",
+    qp_solver: str = "quadprog",
 ) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray]:
     """
     Port of MATLAB sdfcoefficients_BayesKNS, with selectable covariance estimator.
@@ -204,6 +203,9 @@ def sdfcoefficients_bayes_kns(
         - 'det' (default): regcov_det (MATLAB-consistent)
         - 'lw'           : regcov_LW  (original Python placeholder)
         - callable       : custom covariance estimator function(Z)->Sigma
+    qp_solver : str
+        - 'quadprog' (default): Goldfarb-Idnani active-set (matches MATLAB)
+        - 'cvxopt'            : interior-point (legacy, can fail with small gamma)
 
     Returns
     -------
@@ -275,8 +277,14 @@ def sdfcoefficients_bayes_kns(
     Phi = Sigma + V
 
     # Solve constrained and unconstrained
-    beta, _ = kns_ridge_quadprog(mu, Sigma, gamma, A=A, bineq=bineq)
-    beta0, _ = kns_ridge_quadprog(mu, Sigma, gamma)
+    _solver = qp_solver.strip().lower() if isinstance(qp_solver, str) else "quadprog"
+    if _solver == "cvxopt":
+        from .kns_ridge_quadprog_cvxopt import kns_ridge_quadprog as _qp_solve
+    else:
+        from .kns_ridge_quadprog import kns_ridge_quadprog as _qp_solve
+
+    beta, _ = _qp_solve(mu, Sigma, gamma, A=A, bineq=bineq)
+    beta0, _ = _qp_solve(mu, Sigma, gamma)
 
     # Posterior mean vector
     post_mu = Sigma @ beta0
