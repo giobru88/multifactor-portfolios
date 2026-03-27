@@ -290,7 +290,12 @@ def mptfcalculation(P, diagnostics=False):
 
         # ── Market-beta hedge + leverage ──────────────────────────
         Zadj = Z - mktbeta_est[np.newaxis, :] * mkt_est_roll[:, np.newaxis]
-        Lev = np.std(mkt_est_roll, ddof=1) / np.std(Zadj, axis=0, ddof=1)
+        std_adj = np.std(Zadj, axis=0, ddof=1)
+        zero_std = std_adj < 1e-15
+        if np.any(zero_std):
+            Zadj[:, zero_std] = np.nan
+        std_adj_safe = np.where(zero_std, 1.0, std_adj)
+        Lev = np.where(zero_std, np.nan, np.std(mkt_est_roll, ddof=1) / std_adj_safe)
         Zadj = Zadj * Lev[np.newaxis, :]
 
         # ── OOS single-period return (market-adjusted) ────────────
@@ -462,7 +467,12 @@ def mptfcalculation(P, diagnostics=False):
 
     # Hedge + lever
     Zadj_is = Z_is_est - mktbeta_is_slope[np.newaxis, :] * mkt_is_est[:, np.newaxis]
-    Lev_is = np.std(mkt_is_est, ddof=1) / np.std(Zadj_is, axis=0, ddof=1)
+    std_adj_is = np.std(Zadj_is, axis=0, ddof=1)
+    zero_std_is = std_adj_is < 1e-15
+    if np.any(zero_std_is):
+        Zadj_is[:, zero_std_is] = np.nan
+    std_adj_is_safe = np.where(zero_std_is, 1.0, std_adj_is)
+    Lev_is = np.where(zero_std_is, np.nan, np.std(mkt_is_est, ddof=1) / std_adj_is_safe)
     Zadj_is = Zadj_is * Lev_is[np.newaxis, :]
 
     # IS returns (monthly, market-adjusted)

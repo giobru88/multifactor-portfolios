@@ -299,7 +299,8 @@ def regrobustse(y, X, se_type="ordinary", arg4=None):
         )
 
     se = np.sqrt(np.diag(V))
-    tstat = b / se
+    with np.errstate(divide="ignore", invalid="ignore"):
+        tstat = np.where(se > 0, b / se, np.nan)   # NaN when se=0
 
     return {
         "coeff": b,

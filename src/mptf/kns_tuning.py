@@ -82,8 +82,11 @@ def market_beta_adjust(
     # MATLAB std() uses ddof=1
     std_mkt = np.std(mkt, ddof=1)
     std_adj = np.std(R_adj, axis=0, ddof=1)
-    std_adj = np.where(std_adj > 0, std_adj, 1.0)  # guard zero std
-    lev = std_mkt / std_adj  # (N,)
+    zero_std = std_adj < 1e-15
+    if np.any(zero_std):
+        R_adj[:, zero_std] = np.nan
+    std_adj_safe = np.where(zero_std, 1.0, std_adj)
+    lev = np.where(zero_std, np.nan, std_mkt / std_adj_safe)
 
     R_adj = R_adj * lev[np.newaxis, :]
 
