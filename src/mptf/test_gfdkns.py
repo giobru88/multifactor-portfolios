@@ -39,14 +39,14 @@ ptf_type      = "ls"
 full_start    = "1971-01-01"
 full_end      = "2023-12-31"
 
-mptf_type     = ["bayes_kns_dataHJD"]       # start with naive only
+mptf_type     = ["bayes_kns_naive"]       # start with naive only
 fctselid      = ["GFDSPRQFF", "GFDSPRQHXZ", "GFDAIQ_max2", "GFDAIQ"]
 fctselid_cv   = ["GFDAIQ"]
 oos_start     = "1996-07-01"
 oos_end       = "2023-12-31"
 T_est         = 120
 normalizewgt  = "YES"
-est_freq      = "daily"                  # monthly for speed; switch to 'daily' later
+est_freq      = "daily"                    # daily estimation frequency
 updateFreq    = "annual"
 updmonth      = 7
 
@@ -120,6 +120,8 @@ P = {
     "updmonth":     updmonth,
     "CONTAB":       CONTAB,
     "cv_start":     "1977-01-01",
+    "alpha_se_type": "ordinary",
+    "kappa_freeprior": 50.0,
 }
 
 print(f"\n{'='*70}")

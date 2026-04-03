@@ -7,7 +7,7 @@ Created on Tue Feb 24 13:32:41 2026
 
 import calendar
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Union
 import pandas as pd
 
 def _to_date_any(d: Any) -> date:
@@ -41,3 +41,21 @@ def previous_reb_gb(d: Any, m: int) -> date:
         candidate = date(y, m, last_day)
 
     return pd.Timestamp(candidate)
+
+
+_FREQ_MAP = {"daily": 252, "monthly": 12, "weekly": 52}
+
+def parse_frequency(frequency: Union[str, int, float]) -> int:
+    """Convert frequency specification to observations per year (F).
+
+    Accepts 'daily' (252), 'monthly' (12), 'weekly' (52), or a positive int.
+    """
+    if isinstance(frequency, str):
+        key = frequency.strip().lower()
+        if key not in _FREQ_MAP:
+            raise ValueError(f"Unknown frequency='{frequency}'. Use {list(_FREQ_MAP)}.")
+        return _FREQ_MAP[key]
+    F = int(frequency)
+    if F <= 0:
+        raise ValueError("Numeric frequency must be positive.")
+    return F

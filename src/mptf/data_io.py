@@ -39,45 +39,13 @@ def _matlab_datenum_to_datetime(dn: pd.Series) -> pd.Series:
     return pd.to_datetime(dn - 719529, unit="D", origin="unix")
 
 
-def _parse_date_col(date_col: pd.Series, frequency: str) -> pd.Series:
-    """
-    Robust Date parsing:
-    - datetime -> keep
-    - numeric:
-        * if looks like YYYYMMDD -> parse with format
-        * else assume MATLAB datenum
-    - string -> to_datetime
-    Then if monthly -> month end.
-    """
-    if pd.api.types.is_datetime64_any_dtype(date_col):
-        dt = pd.to_datetime(date_col)
-    elif pd.api.types.is_numeric_dtype(date_col):
-        x = pd.to_numeric(date_col, errors="coerce")
+def _parse_date_value(x, frequency: str):
+    """Parse a single date value (numeric, string, or datetime-like).
 
-        # Heuristic: 8-digit integers like 19720131 => YYYYMMDD
-        x_max = float(np.nanmax(x.values)) if len(x) else np.nan
-        if x_max >= 10_000_000:  # 8+ digits
-            dt = pd.to_datetime(x.astype("Int64").astype(str), format="%Y%m%d", errors="coerce")
-        else:
-            # Typical in your MATLAB tables: ~720000 (MATLAB datenum)
-            dt = _matlab_datenum_to_datetime(x)
-    else:
-        dt = pd.to_datetime(date_col, errors="coerce")
+    Numeric heuristic: >= 10_000_000 is treated as YYYYMMDD, otherwise MATLAB datenum.
+    If monthly frequency, shifts to month end.
 
-    if frequency.lower() == "monthly":
-        dt = dt + MonthEnd(0)
-
-    return dt
-
-
-def _parse_date_input(x: DateLike, frequency: str) -> pd.Timestamp:
-    """
-    Accepts:
-    - datetime-like strings ('2005-01-01')
-    - pd.Timestamp
-    - MATLAB datenum as int/float (e.g. 720471)
-    - YYYYMMDD as int (e.g. 19720131)
-    Returns Timestamp (shifted to month end if monthly).
+    Returns a pd.Timestamp.
     """
     if isinstance(x, (int, float, np.integer, np.floating)):
         if x >= 10_000_000:  # YYYYMMDD
@@ -91,6 +59,26 @@ def _parse_date_input(x: DateLike, frequency: str) -> pd.Timestamp:
         ts = ts + MonthEnd(0)
 
     return ts
+
+
+def _parse_date_col(date_col: pd.Series, frequency: str) -> pd.Series:
+    """Robust Date-column parsing (vectorized for Series)."""
+    if pd.api.types.is_datetime64_any_dtype(date_col):
+        dt = pd.to_datetime(date_col)
+    elif pd.api.types.is_numeric_dtype(date_col):
+        x = pd.to_numeric(date_col, errors="coerce")
+        x_max = float(np.nanmax(x.values)) if len(x) else np.nan
+        if x_max >= 10_000_000:
+            dt = pd.to_datetime(x.astype("Int64").astype(str), format="%Y%m%d", errors="coerce")
+        else:
+            dt = _matlab_datenum_to_datetime(x)
+    else:
+        dt = pd.to_datetime(date_col, errors="coerce")
+
+    if frequency.lower() == "monthly":
+        dt = dt + MonthEnd(0)
+
+    return dt
 
 
 def _load_one_parquet(
@@ -155,8 +143,8 @@ def getptfreturns_intprj(
     frequency = frequency.lower()
     ptf_set = list(ptf_set)
 
-    d0 = _parse_date_input(date_start, frequency)
-    d1 = _parse_date_input(date_end, frequency)
+    d0 = _parse_date_value(date_start, frequency)
+    d1 = _parse_date_value(date_end, frequency)
 
     # --- Load first set
     Ftab = _load_one_parquet(base_dir, frequency, ptf_set[0], ptf_type)

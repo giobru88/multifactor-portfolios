@@ -34,12 +34,75 @@ _MKTd_COL = "__MKTd__"
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Helper: update-tuning flag
+# Helpers
 # ═══════════════════════════════════════════════════════════════════
 
 def _update_tuning(upd_tun, upd_tun_pre):
     """Return True if tuning date has advanced."""
     return upd_tun > upd_tun_pre
+
+
+def _hedge_and_lever(Z, mktbeta, mkt_est):
+    """Market-beta hedge and leverage adjustment.
+
+    Parameters
+    ----------
+    Z : ndarray (T, N) — factor returns
+    mktbeta : ndarray (N,) — market beta slopes
+    mkt_est : ndarray (T,) — market returns (same frequency as Z)
+
+    Returns
+    -------
+    Zadj : ndarray (T, N) — hedged and levered returns
+    Lev : ndarray (N,) — leverage factors (NaN where std is zero)
+    """
+    Zadj = Z - mktbeta[np.newaxis, :] * mkt_est[:, np.newaxis]
+    std_adj = np.std(Zadj, axis=0, ddof=1)
+    zero_std = std_adj < 1e-15
+    if np.any(zero_std):
+        Zadj[:, zero_std] = np.nan
+    std_adj_safe = np.where(zero_std, 1.0, std_adj)
+    Lev = np.where(zero_std, np.nan, np.std(mkt_est, ddof=1) / std_adj_safe)
+    Zadj = Zadj * Lev[np.newaxis, :]
+    return Zadj, Lev
+
+
+def _apply_conditional_selection(sel_s, conditional_val, contab, pname, N,
+                                 alphatstat, returns, A):
+    """Apply conditional max/min-K factor selection.
+
+    Parameters
+    ----------
+    sel_s : ndarray (N,) bool — base selection mask
+    conditional_val : float — from parse_maxmin_suffix (0 means no conditional)
+    contab : list of lists — constraint table
+    pname : list of str — factor names
+    N : int — total number of factors
+    alphatstat : ndarray — alpha t-stats for selected factors
+    returns : ndarray — returns for selected factors
+    A : ndarray or None — constraint matrix for selected factors
+
+    Returns
+    -------
+    idFlg_s : ndarray (N,) bool — updated full-length selection mask
+    returns : ndarray — filtered returns
+    A : ndarray or None — filtered constraint matrix
+    """
+    idFlg_s = sel_s.copy()
+    if abs(conditional_val) > 0.01 and contab is not None:
+        Ncon = len(contab)
+        K_adj = conditional_val / Ncon
+        pname_sel = [pname[i] for i in range(N) if sel_s[i]]
+        sel_alpha = pick_by_k(
+            alphatstat, K_adj,
+            pname_sel, contab[0], contab[1],
+        )
+        true_idx = np.where(idFlg_s)[0]
+        idFlg_s[true_idx[~sel_alpha]] = False
+        returns = returns[:, sel_alpha]
+        if A is not None:
+            A = A[:, sel_alpha]
+    return idFlg_s, returns, A
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -73,6 +136,10 @@ def mptfcalculation(P, diagnostics=False):
         cv_freq    : str — frequency for kappa CV ('monthly' or 'daily')
                      (default: same as est_freq)
         qp_solver  : str — 'quadprog' (default, matches MATLAB) or 'cvxopt' (legacy)
+        alpha_se_type : str — SE type for alpha t-stats used in conditional
+                     factor selection ('ordinary', 'white', or 'nw'). Default: 'ordinary'.
+        kappa_freeprior : float or None — fixed kappa value for mptf_type
+                     'bayes_kns_freeprior'. Required when using that type.
     diagnostics : bool
         If True, collect per-rebalancing diagnostics in MPTF["diag"].
 
@@ -93,6 +160,7 @@ def mptfcalculation(P, diagnostics=False):
     updmonth = P.get("updmonth", 7) or 7
     T_est = P["T_est"]              # estimation window in months
     est_freq = P["est_freq"]        # 'monthly' or 'daily'
+    alpha_se_type = P.get("alpha_se_type", "ordinary")
 
     # ── Factor / market data references ───────────────────────────
     ptf = P["PTF"]
@@ -215,6 +283,7 @@ def mptfcalculation(P, diagnostics=False):
         "normalizewgt": P["normalizewgt"],
         "est_freq": est_freq,
         "qp_solver": P.get("qp_solver", "quadprog"),
+        "kappa_freeprior": P.get("kappa_freeprior", None),
     }
 
     # ── Persistent kappa values (carried forward between updates) ─
@@ -280,23 +349,16 @@ def mptfcalculation(P, diagnostics=False):
         mktbeta_coeff = np.linalg.lstsq(X_mkt, Z_mon, rcond=None)[0]
         mktbeta_est = mktbeta_coeff[1, :]  # (N,)
 
-        # ── Alpha t-stats via Newey-West ──────────────────────────
+        # ── Alpha t-stats ─────────────────────────────────────────
         T_est_obs = Z.shape[0]
         X_reg = np.column_stack([np.ones(T_est_obs), mkt_est_roll])
         alphatstat = np.zeros(N)
         for i in range(N):
-            res = regrobustse(Z[:, i], X_reg, "nw")
+            res = regrobustse(Z[:, i], X_reg, alpha_se_type)
             alphatstat[i] = res["tstat"][0]  # intercept t-stat
 
         # ── Market-beta hedge + leverage ──────────────────────────
-        Zadj = Z - mktbeta_est[np.newaxis, :] * mkt_est_roll[:, np.newaxis]
-        std_adj = np.std(Zadj, axis=0, ddof=1)
-        zero_std = std_adj < 1e-15
-        if np.any(zero_std):
-            Zadj[:, zero_std] = np.nan
-        std_adj_safe = np.where(zero_std, 1.0, std_adj)
-        Lev = np.where(zero_std, np.nan, np.std(mkt_est_roll, ddof=1) / std_adj_safe)
-        Zadj = Zadj * Lev[np.newaxis, :]
+        Zadj, Lev = _hedge_and_lever(Z, mktbeta_est, mkt_est_roll)
 
         # ── OOS single-period return (market-adjusted) ────────────
         Z_oos_raw = F_oos.loc[m, _factor_cols].to_numpy(dtype=float)  # (N,)
@@ -374,23 +436,13 @@ def mptfcalculation(P, diagnostics=False):
                 I["bineq"] = CON[fctselid_clean[s]]["bineq"]
                 I["returns"] = Zadj[:, sel_s]
                 I["alphatstat"] = alphatstat[sel_s]
-                idFlg_s = sel_s.copy()
 
                 # Conditional factor selection (max/min K)
-                if abs(conditional_sel[s]) > 0.01 and contab is not None:
-                    Ncon = len(contab)
-                    K_adj = conditional_sel[s] / Ncon
-                    pname_sel = [pname[i] for i in range(N) if sel_s[i]]
-                    sel_alpha = pick_by_k(
-                        I["alphatstat"], K_adj,
-                        pname_sel, contab[0][s], contab[1][s],
-                    )
-                    # Update idFlg_s: among the True positions, keep only sel_alpha
-                    true_idx = np.where(idFlg_s)[0]
-                    idFlg_s[true_idx[~sel_alpha]] = False
-                    I["returns"] = I["returns"][:, sel_alpha]
-                    if I["A"] is not None:
-                        I["A"] = I["A"][:, sel_alpha]
+                contab_s = [contab[l][s] for l in range(len(contab))] if contab is not None else None
+                idFlg_s, I["returns"], I["A"] = _apply_conditional_selection(
+                    sel_s, conditional_sel[s], contab_s, pname, N,
+                    I["alphatstat"], I["returns"], I["A"],
+                )
 
                 # ── Compute weights ───────────────────────────────
                 result = call_mptfweights(I)
@@ -466,14 +518,7 @@ def mptfcalculation(P, diagnostics=False):
     alphatstat_is = mktbeta_is_slope.copy()
 
     # Hedge + lever
-    Zadj_is = Z_is_est - mktbeta_is_slope[np.newaxis, :] * mkt_is_est[:, np.newaxis]
-    std_adj_is = np.std(Zadj_is, axis=0, ddof=1)
-    zero_std_is = std_adj_is < 1e-15
-    if np.any(zero_std_is):
-        Zadj_is[:, zero_std_is] = np.nan
-    std_adj_is_safe = np.where(zero_std_is, 1.0, std_adj_is)
-    Lev_is = np.where(zero_std_is, np.nan, np.std(mkt_is_est, ddof=1) / std_adj_is_safe)
-    Zadj_is = Zadj_is * Lev_is[np.newaxis, :]
+    Zadj_is, Lev_is = _hedge_and_lever(Z_is_est, mktbeta_is_slope, mkt_is_est)
 
     # IS returns (monthly, market-adjusted)
     Z_is_mon = df_f.loc[is_mask_m, _factor_cols].to_numpy(dtype=float)
@@ -507,22 +552,13 @@ def mptfcalculation(P, diagnostics=False):
             I["bineq"] = CON[fctselid_clean[s]]["bineq"]
             I["returns"] = Zadj_is[:, sel_s]
             I["alphatstat"] = alphatstat_is[sel_s]
-            idFlg_s = sel_s.copy()
 
             # Conditional selection
-            if abs(conditional_sel[s]) > 0.01 and contab is not None:
-                Ncon = len(contab)
-                K_adj = conditional_sel[s] / Ncon
-                pname_sel = [pname[i] for i in range(N) if sel_s[i]]
-                sel_alpha = pick_by_k(
-                    I["alphatstat"], K_adj,
-                    pname_sel, contab[0][s], contab[1][s],
-                )
-                true_idx = np.where(idFlg_s)[0]
-                idFlg_s[true_idx[~sel_alpha]] = False
-                I["returns"] = I["returns"][:, sel_alpha]
-                if I["A"] is not None:
-                    I["A"] = I["A"][:, sel_alpha]
+            contab_s = [contab[l][s] for l in range(len(contab))] if contab is not None else None
+            idFlg_s, I["returns"], I["A"] = _apply_conditional_selection(
+                sel_s, conditional_sel[s], contab_s, pname, N,
+                I["alphatstat"], I["returns"], I["A"],
+            )
 
             result = call_mptfweights(I)
             beta = result[0] if isinstance(result, tuple) else result

@@ -22,6 +22,7 @@ from typing import Callable, Dict, Literal, Optional, Tuple, Union
 import numpy as np
 
 from .portfolio_helpers import regcov_det, regcov_LW, regcov_sample
+from .helpers import parse_frequency
 
 
 # Type aliases
@@ -274,24 +275,6 @@ _OOS_DISPATCH: Dict[str, Callable] = {
 
 
 # ================================================================== #
-#  Frequency helper                                                   #
-# ================================================================== #
-
-def _parse_frequency(frequency: Union[str, int, float]) -> int:
-    """Convert frequency specification to observations per year (F)."""
-    if isinstance(frequency, str):
-        _map = {"daily": 252, "monthly": 12, "weekly": 52}
-        key = frequency.strip().lower()
-        if key not in _map:
-            raise ValueError(f"Unknown frequency='{frequency}'. Use {list(_map)}.")
-        return _map[key]
-    F = int(frequency)
-    if F <= 0:
-        raise ValueError("Numeric frequency must be positive.")
-    return F
-
-
-# ================================================================== #
 #  Main function                                                      #
 # ================================================================== #
 
@@ -400,7 +383,7 @@ def kns_tuning_kappa(
         raise ValueError("mkt must not contain NaN.")
 
     # ── Parse options ─────────────────────────────────────────────
-    F = _parse_frequency(frequency)
+    F = parse_frequency(frequency)
     cov_func = _get_cov_func(cov_method)
 
     otype = output_type.strip().lower()

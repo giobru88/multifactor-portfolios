@@ -147,14 +147,14 @@ def _markowitz_handler(
     mu = np.nanmean(R, axis=0)
 
     ck = cov_kind.strip().lower()
-    if ck in {"naive", "sample", "cov"}:
-        Sigma = regcov_sample(R)
-    elif ck in {"det", "detcov"}:
-        Sigma = regcov_det(R)
-    elif ck in {"lw", "lwcov"}:
-        Sigma = regcov_LW(R)
-    else:
+    _cov_dispatch = {
+        "naive": regcov_sample, "sample": regcov_sample, "cov": regcov_sample,
+        "det": regcov_det, "detcov": regcov_det,
+        "lw": regcov_LW, "lwcov": regcov_LW,
+    }
+    if ck not in _cov_dispatch:
         raise ValueError(f"_markowitz_handler: unknown cov_kind='{cov_kind}'")
+    Sigma = _cov_dispatch[ck](R)
 
     A = _get(I, "A", None)
     bineq = _get(I, "bineq", None)

@@ -22,9 +22,26 @@ Author: (ported for Giovanni Bruno)
 from typing import Callable, Literal, Optional, Tuple, Union
 import numpy as np
 
+from .helpers import parse_frequency
 
 Frequency = Literal["monthly", "weekly", "daily"]
 CovMethod = Literal["det", "lw","sample"]
+
+
+# -----------------------------------------------------------------------------
+# Covariance input validation
+# -----------------------------------------------------------------------------
+def _validate_cov_input(Z: np.ndarray, name: str = "regcov") -> np.ndarray:
+    """Validate and cast input for covariance estimators."""
+    Z = np.asarray(Z, dtype=np.float64)
+    if Z.ndim != 2:
+        raise ValueError(f"{name}: input must be 2D (T x N).")
+    if not np.isfinite(Z).all():
+        raise ValueError(f"{name}: input contains NaN/Inf. Handle missing data upstream.")
+    T, _ = Z.shape
+    if T < 2:
+        raise ValueError(f"{name}: need at least 2 observations (T>=2).")
+    return Z
 
 
 # -----------------------------------------------------------------------------
@@ -56,15 +73,8 @@ def regcov_det(r: np.ndarray) -> np.ndarray:
     X_reg : ndarray, shape (n, n)
         Regularized covariance matrix.
     """
-    r = np.asarray(r, dtype=np.float64)
-    if r.ndim != 2:
-        raise ValueError("regcov_det: input must be 2D (T x n).")
-    if not np.isfinite(r).all():
-        raise ValueError("regcov_det: input contains NaN/Inf. Handle missing data upstream.")
-
+    r = _validate_cov_input(r, "regcov_det")
     T, n = r.shape
-    if T < 2:
-        raise ValueError("regcov_det: need at least 2 observations (T>=2).")
 
     # MATLAB cov(r): columns=variables, unbiased normalization 1/(T-1)
     X = np.cov(r, rowvar=False, bias=False)  # (n, n)
@@ -96,15 +106,8 @@ def regcov_LW(Z: np.ndarray) -> np.ndarray:
     -------
     Sigma : ndarray, shape (N, N)
     """
-    Z = np.asarray(Z, dtype=float)
-    if Z.ndim != 2:
-        raise ValueError("regcov_LW: Z must be 2D (T x N).")
-    if not np.isfinite(Z).all():
-        raise ValueError("regcov_LW: Z contains NaN/Inf; handle missingness upstream.")
-
+    Z = _validate_cov_input(Z, "regcov_LW")
     T, N = Z.shape
-    if T < 2:
-        raise ValueError("regcov_LW: Need at least 2 observations to estimate covariance.")
 
     # Center
     X = Z - Z.mean(axis=0, keepdims=True)
@@ -136,14 +139,8 @@ def regcov_sample(Z: np.ndarray) -> np.ndarray:
     - columns = variables, rows = observations
     - unbiased normalization (divide by T-1)
     """
-    Z = np.asarray(Z, dtype=float)
-    if Z.ndim != 2:
-        raise ValueError("regcov_sample: Z must be 2D (T x N).")
-    if not np.isfinite(Z).all():
-        raise ValueError("regcov_sample: Z contains NaN/Inf; handle missingness upstream.")
+    Z = _validate_cov_input(Z, "regcov_sample")
     T, N = Z.shape
-    if T < 2:
-        raise ValueError("regcov_sample: need at least 2 observations (T>=2).")
 
     Sigma = np.cov(Z, rowvar=False, bias=False)  # (N,N), divide by T-1
     Sigma = 0.5 * (Sigma + Sigma.T)
@@ -218,15 +215,7 @@ def sdfcoefficients_bayes_kns(
     Phi : ndarray, shape (N, N)
         Phi = Sigma + (1/(T*gamma))*Sigma
     """
-    freq = str(frequency).lower()
-    if freq == "monthly":
-        F = 12.0
-    elif freq == "weekly":
-        F = 52.0
-    elif freq == "daily":
-        F = 252.0
-    else:
-        raise ValueError("frequency must be one of: 'monthly', 'weekly', 'daily'.")
+    F = float(parse_frequency(frequency))
 
     Z = np.asarray(Z, dtype=float)
     if Z.ndim != 2:
@@ -247,18 +236,17 @@ def sdfcoefficients_bayes_kns(
     if callable(cov_method):
        Sigma = cov_method(Z)
     else:
+        _cov_dispatch = {
+            "det": regcov_det, "lw": regcov_LW,
+            "sample": regcov_sample, "cov": regcov_sample, "standard": regcov_sample,
+        }
         cm = str(cov_method).strip().lower()
-        if cm == "det":
-           Sigma = regcov_det(Z)          # MATLAB-consistent
-        elif cm == "lw":
-           Sigma = regcov_LW(Z)           # placeholder
-        elif cm in {"sample", "cov", "standard"}:
-           Sigma = regcov_sample(Z)       # standard sample cov (T-1)
-        else:
+        if cm not in _cov_dispatch:
            raise ValueError(
             "cov_method must be 'det', 'lw', 'sample' (or 'cov'/'standard'), "
             "or a callable(Z)->Sigma."
-        )
+           )
+        Sigma = _cov_dispatch[cm](Z)
 
     # (optional but recommended) sanity checks:
     Sigma = np.asarray(Sigma, dtype=float)
